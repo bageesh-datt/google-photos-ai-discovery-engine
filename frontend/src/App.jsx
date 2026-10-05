@@ -53,8 +53,13 @@ export default function App() {
           }
         } catch (err) {
           console.error('Polling error:', err);
+          clearInterval(interval);
+          setError(err.message || 'Analysis session expired or not found. Please select a dataset to try again.');
+          setViewState('UPLOAD');
+          setAnalysisId(null);
         }
       }, 600);
+
     }
     return () => {
       if (interval) clearInterval(interval);

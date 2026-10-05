@@ -168,6 +168,50 @@ def update_status(
     return status_resp
 
 
+PILOT_FALLBACK_CACHE: Optional[Dict[str, Any]] = None
+
+def is_pilot_analysis(analysis_id: str) -> bool:
+    """Returns True if analysis_id is associated with preset-pilot-v1."""
+    return (
+        analysis_id == "preset-pilot-v1"
+        or analysis_id.startswith("analysis-pilot-")
+    )
+
+
+def get_preset_pilot_fallback_results() -> Dict[str, Any]:
+    """Computes or retrieves cached deterministic results for preset-pilot-v1."""
+    global PILOT_FALLBACK_CACHE
+    if PILOT_FALLBACK_CACHE is not None:
+        return PILOT_FALLBACK_CACHE
+        
+    raw_dataset = load_raw_dataset("preset-pilot-v1")
+    relevance_results = filter_relevance(raw_dataset.records)
+    relevance_map = {r.id: r for r in relevance_results}
+    structured_obs = extract_structured_observations(raw_dataset.records, relevance_map=relevance_map)
+    clusters = cluster_observations(structured_obs)
+    opportunities = synthesize_opportunities(clusters)
+    
+    valid_relevant_count = sum(1 for o in structured_obs if is_valid_retrieval_observation(o))
+
+    PILOT_FALLBACK_CACHE = {
+        "status": AnalysisStatusResponse(
+            analysis_id="preset-pilot-v1",
+            dataset_id="preset-pilot-v1",
+            stage="Completed",
+            progress_pct=100,
+            status="completed",
+            total_observations=len(raw_dataset.records),
+            relevant_observations_count=valid_relevant_count,
+            clusters_count=len(clusters),
+            opportunities_count=len(opportunities)
+        ),
+        "observations": [o.model_dump() for o in structured_obs],
+        "clusters": [c.model_dump() for c in clusters],
+        "opportunities": [opp.model_dump() for opp in opportunities]
+    }
+    return PILOT_FALLBACK_CACHE
+
+
 def get_pipeline_status(analysis_id: str) -> AnalysisStatusResponse:
     if analysis_id in STATUS_CACHE:
         return STATUS_CACHE[analysis_id]
@@ -180,6 +224,13 @@ def get_pipeline_status(analysis_id: str) -> AnalysisStatusResponse:
             STATUS_CACHE[analysis_id] = status_obj
             return status_obj
             
+    if is_pilot_analysis(analysis_id):
+        fallback_data = get_preset_pilot_fallback_results()
+        fallback_status = fallback_data["status"].model_copy()
+        fallback_status.analysis_id = analysis_id
+        STATUS_CACHE[analysis_id] = fallback_status
+        return fallback_status
+
     raise FileNotFoundError(f"Analysis with ID '{analysis_id}' not found.")
 
 
@@ -296,7 +347,10 @@ def run_discovery_pipeline_sync(analysis_id: str, dataset_id: str):
 
 def start_pipeline_job(dataset_id: str) -> str:
     """Creates a new analysis_id and launches pipeline task."""
-    analysis_id = f"analysis-{uuid.uuid4().hex[:8]}"
+    if dataset_id == "preset-pilot-v1":
+        analysis_id = f"analysis-pilot-{uuid.uuid4().hex[:8]}"
+    else:
+        analysis_id = f"analysis-{uuid.uuid4().hex[:8]}"
     update_status(analysis_id, dataset_id, "Initializing Pipeline", 0, "processing")
     
     # In Vercel serverless environments, execute synchronously to prevent background thread cancellation
@@ -309,10 +363,16 @@ def start_pipeline_job(dataset_id: str) -> str:
     return analysis_id
 
 
-
 def build_export_report(analysis_id: str) -> AnalysisExportResponse:
     """Builds complete export report with full evidence traceability mapping."""
-    status_info = get_pipeline_status(analysis_id)
+    try:
+        status_info = get_pipeline_status(analysis_id)
+    except FileNotFoundError:
+        if is_pilot_analysis(analysis_id):
+            fallback_data = get_preset_pilot_fallback_results()
+            status_info = fallback_data["status"]
+        else:
+            raise
     
     observations = []
     clusters = []
@@ -337,6 +397,13 @@ def build_export_report(analysis_id: str) -> AnalysisExportResponse:
         if os.path.exists(opps_file):
             with open(opps_file, "r", encoding="utf-8") as f:
                 opportunities = json.load(f)
+
+        if not observations and is_pilot_analysis(analysis_id):
+            fallback_data = get_preset_pilot_fallback_results()
+            observations = fallback_data.get("observations", [])
+            clusters = fallback_data.get("clusters", [])
+            opportunities = fallback_data.get("opportunities", [])
+
 
     if observations:
         valid_relevant_count = sum(1 for o in observations if is_valid_retrieval_observation(o))

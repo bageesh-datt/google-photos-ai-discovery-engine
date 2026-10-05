@@ -20,6 +20,8 @@ from backend.app.services.pipeline import (
     get_pipeline_status,
     build_export_report,
     RESULTS_CACHE,
+    is_pilot_analysis,
+    get_preset_pilot_fallback_results,
 )
 
 router = APIRouter(prefix="/api/analysis", tags=["AI Discovery Pipeline"])
@@ -80,13 +82,17 @@ async def get_analysis_observations(
         records = RESULTS_CACHE[analysis_id].get("observations", [])
     else:
         obs_file = os.path.join(settings.OUTPUT_DIR, "observations", f"{analysis_id}.json")
-        if not os.path.exists(obs_file):
+        if os.path.exists(obs_file):
+            with open(obs_file, "r", encoding="utf-8") as f:
+                records = json.load(f)
+        elif is_pilot_analysis(analysis_id):
+            fallback_data = get_preset_pilot_fallback_results()
+            records = fallback_data.get("observations", [])
+        else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Observations for analysis ID '{analysis_id}' not found. Pipeline may still be processing."
             )
-        with open(obs_file, "r", encoding="utf-8") as f:
-            records = json.load(f)
         
     if category:
         records = [r for r in records if r.get("problem_category") == category]
@@ -105,14 +111,18 @@ async def get_analysis_clusters(analysis_id: str):
         return RESULTS_CACHE[analysis_id].get("clusters", [])
         
     clusters_file = os.path.join(settings.OUTPUT_DIR, "clusters", f"{analysis_id}.json")
-    if not os.path.exists(clusters_file):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Clusters for analysis ID '{analysis_id}' not found. Pipeline may still be processing."
-        )
-        
-    with open(clusters_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if os.path.exists(clusters_file):
+        with open(clusters_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+            
+    if is_pilot_analysis(analysis_id):
+        fallback_data = get_preset_pilot_fallback_results()
+        return fallback_data.get("clusters", [])
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Clusters for analysis ID '{analysis_id}' not found. Pipeline may still be processing."
+    )
 
 
 @router.get(
@@ -126,14 +136,19 @@ async def get_analysis_opportunities(analysis_id: str):
         return RESULTS_CACHE[analysis_id].get("opportunities", [])
         
     opps_file = os.path.join(settings.OUTPUT_DIR, "opportunities", f"{analysis_id}.json")
-    if not os.path.exists(opps_file):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Opportunities for analysis ID '{analysis_id}' not found. Pipeline may still be processing."
-        )
-        
-    with open(opps_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if os.path.exists(opps_file):
+        with open(opps_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    if is_pilot_analysis(analysis_id):
+        fallback_data = get_preset_pilot_fallback_results()
+        return fallback_data.get("opportunities", [])
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Opportunities for analysis ID '{analysis_id}' not found. Pipeline may still be processing."
+    )
+
 
 
 
