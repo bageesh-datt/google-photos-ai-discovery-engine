@@ -67,14 +67,17 @@ export default function App() {
   }, [viewState, analysisId]);
 
   const handleStartAnalysis = async (dId) => {
+    if (viewState === 'PROCESSING') return;
     setDatasetId(dId);
+    setStatusData(null);
     setError(null);
+    setViewState('PROCESSING');
     try {
       const res = await startAnalysis(dId);
       setAnalysisId(res.analysis_id);
-      setViewState('PROCESSING');
     } catch (err) {
       setError(err.message || 'Failed to trigger AI analysis.');
+      setViewState('UPLOAD');
     }
   };
 
